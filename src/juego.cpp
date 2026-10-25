@@ -11,8 +11,7 @@
  *  - JUGANDO --choque--> FIN
  *  - FIN: joystick elige "Reintentar" o "Menu", A confirma.
  *
- *  Cada juego tiene su propio récord (mientras la consola
- *  está encendida).
+ *  Los récords se guardan en NVS por juego, dificultad y modo.
  *
  *  SONIDO (FOP-01): la consola hace sonar el menú, la pausa,
  *  el choque y el game over; cada juego hace sonar lo suyo
@@ -26,7 +25,10 @@
 #include "snake.h"
 #include "dino.h"
 #include "carreras.h"
+#include "brasa.h"
 #include "sonido.h"
+#include <Preferences.h>
+#include "interfaz.h"
 
 // ------------------------------------------------------------
 //  1. ÍCONOS DEL MENÚ (7 x 7 píxeles, 'h' = píxel pintado)
@@ -58,6 +60,9 @@ static const char* const ICONO_CARRERAS[7] = {
   "hh...hh",
   ".hhhhh.",
 };
+static const char* const ICONO_BRASA[7] = {
+  "..hhh..", ".hhhhh.", "..hhh..", ".hhhhh.", "h.hhh.h", "..h.h..", ".hh.hh."
+};
 
 // ------------------------------------------------------------
 //  2. TABLA DE JUEGOS
@@ -74,7 +79,7 @@ struct Juego {
   uint16_t color;                 // Color del botón en el menú
   const char* const* icono;       // Ícono de 7 x 7
   void (*comenzar)();
-  bool (*actualizar)(const EstadoControles&);
+  ResultadoPartida (*actualizar)(const EstadoControles&);
   void (*redibujar)();
   int  (*puntuacion)();
 };
@@ -86,6 +91,8 @@ static const Juego JUEGOS[] = {
     comenzarDino,     actualizarDino,     redibujarDino,     puntuacionDino },
   { "CARRERAS", COLOR_JUEGO_CARRERAS, ICONO_CARRERAS,
     comenzarCarreras, actualizarCarreras, redibujarCarreras, puntuacionCarreras },
+  { "JUMP-MAN", 0xA21F, ICONO_BRASA,
+    comenzarBrasa, actualizarBrasa, redibujarBrasa, puntuacionBrasa },
 };
 
 // Cantidad de juegos de la tabla (se calcula sola)
@@ -103,7 +110,16 @@ static bool juegoDisponible(int indice) {
 static EstadoJuego estadoActual = ESTADO_MENU;
 
 static int juegoActual   = 0;                 // Fila de JUEGOS elegida en el menú
-static int records[CANTIDAD_JUEGOS] = { 0 };  // Un récord por juego (FO-12)
+static int records[CANTIDAD_JUEGOS][3][3] = {};
+static Preferences preferencias;
+static bool almacenamientoDisponible = false;
+static Dificultad dificultad = NORMAL;
+static ModoSnake modoSnake = SNAKE_CLASICO;
+static bool victoria = false;
+static unsigned long inicioTransicion = 0;
+static unsigned long ultimaActividadFin = 0;
+constexpr unsigned long INACTIVIDAD_FIN_MS = 15000;
+static int cuadroTransicion = -1;
 static int ultimaPuntuacion = 0;              // Puntos de la última partida
 
 // Pausa al chocar, para ver y oír el choque antes del game over
@@ -115,6 +131,25 @@ static int opcionFin = 0;
 // Estado anterior del joystick (para detectar "un toque")
 static bool arribaAnterior = false;
 static bool abajoAnterior  = false;
+static bool izquierdaAnterior = false;
+static bool derechaAnterior = false;
+
+Dificultad dificultadActual() { return dificultad; }
+ModoSnake modoSnakeActual() { return modoSnake; }
+static int varianteActual() { return juegoActual == 0 ? (int)modoSnake : 0; }
+int recordActual() { return records[juegoActual][dificultad][varianteActual()]; }
+static const char* const DIFICULTADES[] = { "FACIL", "NORMAL", "DIFICIL" };
+static const char* const MODOS_SNAKE[] = { "CLASICO", "SIN BORDES", "LABERINTO" };
+
+static void claveRecord(char* clave, size_t capacidad, int juego, int dif, int modo) {
+  snprintf(clave, capacidad, "j%d_d%d_m%d", juego, dif, modo);
+}
+
+static void dibujarSonido() {
+  bool sobreJuego=estadoActual==ESTADO_JUGANDO || estadoActual==ESTADO_CUENTA ||
+                  estadoActual==ESTADO_PAUSA || estadoActual==ESTADO_CHOQUE;
+  dibujarAltavoz(sobreJuego?COLOR_BARRA:COLOR_FONDO_UI);
+}
 
 // ------------------------------------------------------------
 //  4. ELEMENTOS DE DIBUJO REUTILIZABLES
@@ -176,7 +211,7 @@ static void dibujarCorona(int x, int y) {
 // Escribe "RECORD: N" centrado, con la corona a la izquierda
 static void dibujarLineaRecord(int y, int valor, uint16_t colorTexto) {
   char texto[20];
-  snprintf(texto, sizeof(texto), "RECORD: %d", valor);
+  snprintf(texto, sizeof(texto), "Record: %d", valor);
   int x = (ANCHO_PANTALLA - anchoTexto(texto, 1)) / 2 + 5;
   dibujarCorona(x - 11, y);
   escribirTexto(x, y, texto, colorTexto, 1);
@@ -190,30 +225,30 @@ static void dibujarLineaRecord(int y, int valor, uint16_t colorTexto) {
 // Se redibuja solo esta parte cada vez que se mueve el joystick.
 static void dibujarOpcionesMenu() {
   // Borrar la zona de botones y la línea del récord
-  rectanguloRelleno(26, 40, 108, 54, COLOR_FONDO_UI);
+  rectanguloRelleno(26, 36, 108, 60, COLOR_FONDO_UI);
   rectanguloRelleno(10, 99, ANCHO_PANTALLA - 20, 9, COLOR_FONDO_UI);
 
   char texto[20];
   for (int i = 0; i < CANTIDAD_JUEGOS; i++) {
-    int y = 40 + i * 19;
+    int y = 36 + i * 15;
     const Juego& j = JUEGOS[i];
     if (i == juegoActual) {
       // Opción seleccionada: botón relleno con el color del juego
-      rectanguloRedondeado(26, y, 108, 16, 3, j.color, true);
+      rectanguloRedondeado(26, y, 108, 14, 3, j.color, true);
       snprintf(texto, sizeof(texto), "> %s", j.nombre);
-      escribirCentrado(y + 4, texto, COLOR_BLANCO, 1);
-      dibujarIcono(31, y + 4, j.icono, COLOR_BLANCO);
+      escribirCentrado(y + 3, texto, COLOR_BLANCO, 1);
+      dibujarIcono(31, y + 3, j.icono, COLOR_BLANCO);
     } else {
       // Opción sin elegir: solo el borde del color del juego
-      rectanguloRedondeado(26, y, 108, 16, 3, j.color, false);
-      escribirCentrado(y + 4, j.nombre, COLOR_GRIS_CLARO, 1);
-      dibujarIcono(31, y + 4, j.icono, j.color);
+      rectanguloRedondeado(26, y, 108, 14, 3, j.color, false);
+      escribirCentrado(y + 3, j.nombre, COLOR_GRIS_CLARO, 1);
+      dibujarIcono(31, y + 3, j.icono, j.color);
     }
   }
 
   // Debajo: récord del juego elegido, o aviso si aún no existe
   if (juegoDisponible(juegoActual)) {
-    dibujarLineaRecord(100, records[juegoActual], COLOR_BLANCO);
+    dibujarLineaRecord(100, recordActual(), COLOR_BLANCO);
   } else {
     escribirCentrado(100, "PROXIMAMENTE", COLOR_GRIS, 1);
   }
@@ -227,7 +262,49 @@ static void dibujarPantallaMenu() {
   dibujarLinea(20, 32, 139, 32, COLOR_MARCO_UI);
 
   dibujarOpcionesMenu();
-  escribirCentrado(113, "MUEVE Y PRESIONA A", COLOR_GRIS, 1);
+  escribirCentrado(113, "A: OPCIONES B: AYUDA", COLOR_GRIS, 1);
+  dibujarSonido();
+}
+
+static void dibujarConfiguracion() {
+  dibujarFondoConMarco();
+  escribirCentrado(15, JUEGOS[juegoActual].nombre, COLOR_AMARILLO, 2);
+  escribirCentrado(43, "ARRIBA/ABAJO: NIVEL", COLOR_GRIS, 1);
+  escribirCentrado(56, DIFICULTADES[dificultad], COLOR_BLANCO, 2);
+  if (juegoActual == 0) {
+    escribirCentrado(78, "IZQ/DER: MODO", COLOR_GRIS, 1);
+    escribirCentrado(91, MODOS_SNAKE[modoSnake], COLOR_AMARILLO, 1);
+  } else {
+    dibujarLineaRecord(87, recordActual(), COLOR_AMARILLO);
+  }
+  escribirCentrado(112, "A: JUGAR  B: VOLVER", COLOR_GRIS_CLARO, 1);
+  dibujarSonido();
+}
+
+static void dibujarAyuda() {
+  dibujarFondoConMarco();
+  escribirCentrado(14, JUEGOS[juegoActual].nombre, COLOR_AMARILLO, 2);
+  if (juegoActual == 0) {
+    escribirCentrado(40, "JOYSTICK: GIRAR", COLOR_BLANCO, 1);
+    escribirCentrado(53, "DORADA: +3, TEMPORAL", COLOR_BLANCO, 1);
+    escribirCentrado(66, "COME RAPIDO: COMBO", COLOR_BLANCO, 1);
+  } else if (juegoActual == 1) {
+    escribirCentrado(40, "A/ARRIBA: SALTAR", COLOR_BLANCO, 1);
+    escribirCentrado(53, "MANTENER: SALTO ALTO", COLOR_BLANCO, 1);
+    escribirCentrado(66, "ABAJO: AGACHAR/CAER", COLOR_BLANCO, 1);
+  } else if (juegoActual == 2) {
+    escribirCentrado(40, "IZQ/DER: CARRIL", COLOR_BLANCO, 1);
+    escribirCentrado(53, "ARRIBA/ABAJO: GAS", COLOR_BLANCO, 1);
+    escribirCentrado(66, "A: TURBO LIMITADO", COLOR_BLANCO, 1);
+  } else {
+    escribirCentrado(40, "IZQ/DER: CAMINAR", COLOR_BLANCO, 1);
+    escribirCentrado(53, "A/ARRIBA: SALTAR", COLOR_BLANCO, 1);
+    escribirCentrado(66, "B: FUEGO CON FLOR", COLOR_BLANCO, 1);
+    escribirCentrado(79, "ABAJO: AGACHARSE", COLOR_GRIS_CLARO, 1);
+  }
+  escribirCentrado(96, "C: PAUSA  D: SONIDO", COLOR_GRIS_CLARO, 1);
+  escribirCentrado(112, "A/B: VOLVER", COLOR_GRIS, 1);
+  dibujarSonido();
 }
 
 // --- Pantalla 2: PAUSA (se dibuja encima del juego) ---
@@ -238,6 +315,7 @@ static void dibujarPantallaPausa() {
   escribirTituloConSombra(45, "PAUSA", COLOR_AMARILLO);
   escribirCentrado(66, "C: SEGUIR", COLOR_BLANCO, 1);
   escribirCentrado(77, "B: MENU", COLOR_GRIS, 1);
+  dibujarSonido();
 }
 
 // --- Opciones de la pantalla de fin ---
@@ -261,15 +339,18 @@ static void dibujarOpcionesFin() {
 static void dibujarPantallaFin() {
   dibujarFondoConMarco();
 
-  escribirTituloConSombra(12, "GAME OVER", COLOR_ROJO);
+  escribirTituloConSombra(12, victoria ? "VICTORIA" : "GAME OVER",
+                          victoria ? COLOR_AMARILLO : COLOR_ROJO);
 
   char texto[24];
-  snprintf(texto, sizeof(texto), "PUNTUACION: %d", ultimaPuntuacion);
+  snprintf(texto, sizeof(texto), "Puntaje: %d", ultimaPuntuacion);
   escribirCentrado(36, texto, COLOR_BLANCO, 1);
-  dibujarLineaRecord(48, records[juegoActual], COLOR_AMARILLO);
+  dibujarLineaRecord(48, recordActual(), COLOR_AMARILLO);
 
   dibujarOpcionesFin();
-  escribirCentrado(110, "MUEVE Y PRESIONA A", COLOR_GRIS, 1);
+  escribirCentrado(108, "Menu tras 15 s sin uso", COLOR_GRIS, 1);
+  escribirCentrado(118, "Arriba/abajo y A", COLOR_GRIS, 1);
+  dibujarSonido();
 }
 
 // ------------------------------------------------------------
@@ -290,16 +371,32 @@ static void cambiarEstado(EstadoJuego nuevoEstado) {
       dibujarPantallaMenu();
       break;
 
-    case ESTADO_JUGANDO:
+    case ESTADO_CONFIGURACION:
+      dibujarConfiguracion();
+      break;
+    case ESTADO_AYUDA:
+      dibujarAyuda();
+      break;
+    case ESTADO_CUENTA:
       if (estadoPrevio != ESTADO_PAUSA) {
-        // Partida nueva (desde MENU o desde FIN)
-        Serial.printf("Estado: JUGANDO %s (partida nueva)\r\n", JUEGOS[juegoActual].nombre);
+        victoria = false;
         JUEGOS[juegoActual].comenzar();
-      } else {
-        // Se continúa la misma partida
-        Serial.printf("Estado: JUGANDO %s (continua)\r\n", JUEGOS[juegoActual].nombre);
-        JUEGOS[juegoActual].redibujar();
-      }
+      } else JUEGOS[juegoActual].redibujar();
+      fijarMotor(0);
+      dibujarSonido();
+      inicioTransicion = millis();
+      cuadroTransicion = 0;
+      rectanguloRelleno(23,44,114,38,COLOR_FONDO_UI);
+      escribirCentrado(55,"3",COLOR_AMARILLO,2);
+      break;
+    case ESTADO_JUGANDO:
+      JUEGOS[juegoActual].redibujar();
+      dibujarSonido();
+      break;
+    case ESTADO_CHOQUE:
+      inicioTransicion = millis();
+      cuadroTransicion = -1;
+      reproducirSonido(SONIDO_CHOQUE);
       break;
 
     case ESTADO_PAUSA:
@@ -308,21 +405,29 @@ static void cambiarEstado(EstadoJuego nuevoEstado) {
       break;
 
     case ESTADO_FIN:
+      ultimaActividadFin = millis();
       ultimaPuntuacion = JUEGOS[juegoActual].puntuacion();
       // La fanfarria suena solo al SUPERAR un récord anterior.
       // En la primera partida (récord 0) siempre se "bate" el récord,
       // así que ahí suena la melodía normal de game over.
-      if (records[juegoActual] > 0 && ultimaPuntuacion > records[juegoActual]) {
+      if (victoria || (recordActual() > 0 && ultimaPuntuacion > recordActual())) {
         reproducirSonido(SONIDO_RECORD);       // ¡Récord nuevo!
       } else {
         reproducirSonido(SONIDO_GAME_OVER);
       }
-      if (ultimaPuntuacion > records[juegoActual]) {
-        records[juegoActual] = ultimaPuntuacion;
+      if (ultimaPuntuacion > recordActual()) {
+        records[juegoActual][dificultad][varianteActual()] = ultimaPuntuacion;
+        if (almacenamientoDisponible) {
+          char clave[16];
+          claveRecord(clave, sizeof(clave), juegoActual, dificultad, varianteActual());
+          if (preferencias.putInt(clave, ultimaPuntuacion) != sizeof(int)) {
+            Serial.println("No se pudo guardar el record en NVS.");
+          }
+        }
       }
       opcionFin = 0;
       Serial.printf("Estado: FIN %s (puntuacion %d, record %d)\r\n",
-                    JUEGOS[juegoActual].nombre, ultimaPuntuacion, records[juegoActual]);
+                    JUEGOS[juegoActual].nombre, ultimaPuntuacion, recordActual());
       dibujarPantallaFin();
       break;
   }
@@ -332,8 +437,16 @@ static void cambiarEstado(EstadoJuego nuevoEstado) {
 //  7. FUNCIONES PÚBLICAS
 // ------------------------------------------------------------
 void iniciarJuego() {
+  almacenamientoDisponible = preferencias.begin("miniconsola", false);
+  if (!almacenamientoDisponible) Serial.println("NVS no disponible: records solo en RAM.");
   for (int i = 0; i < CANTIDAD_JUEGOS; i++) {
-    records[i] = 0;
+    for (int d = 0; d < 3; d++) {
+      for (int m = 0; m < (i == 0 ? 3 : 1); m++) {
+        char clave[16];
+        claveRecord(clave, sizeof(clave), i, d, m);
+        records[i][d][m] = almacenamientoDisponible ? max(0, (int)preferencias.getInt(clave, 0)) : 0;
+      }
+    }
   }
   juegoActual = 0;
   iniciarSonido();
@@ -342,13 +455,22 @@ void iniciarJuego() {
 }
 
 void actualizarJuego(const EstadoControles& controles) {
+  if(estadoActual==ESTADO_FIN &&
+     (controles.arriba || controles.abajo || controles.izquierda || controles.derecha ||
+      controles.a.presionado || controles.a.recienPresionado ||
+      controles.b.presionado || controles.b.recienPresionado ||
+      controles.c.presionado || controles.c.recienPresionado ||
+      controles.d.presionado || controles.d.recienPresionado)) ultimaActividadFin=millis();
   // "Un toque" del joystick: ahora está movido y antes no
   bool toqueArriba = controles.arriba && !arribaAnterior;
   bool toqueAbajo  = controles.abajo  && !abajoAnterior;
+  bool toqueIzquierda = controles.izquierda && !izquierdaAnterior;
+  bool toqueDerecha = controles.derecha && !derechaAnterior;
 
   // D: silenciar / activar el sonido (en cualquier pantalla)
   if (controles.d.recienPresionado) {
     alternarSilencio();
+    dibujarSonido();
   }
 
   switch (estadoActual) {
@@ -367,35 +489,93 @@ void actualizarJuego(const EstadoControles& controles) {
       // A: entrar al juego (solo si ya está programado)
       if (controles.a.recienPresionado && juegoDisponible(juegoActual)) {
         reproducirSonido(SONIDO_MENU_ELEGIR);
-        cambiarEstado(ESTADO_JUGANDO);
+        cambiarEstado(ESTADO_CONFIGURACION);
+      }
+      else if (controles.b.recienPresionado) cambiarEstado(ESTADO_AYUDA);
+      break;
+
+    case ESTADO_CONFIGURACION:
+      if (toqueArriba || toqueAbajo) {
+        dificultad = (Dificultad)(((int)dificultad + (toqueArriba ? 2 : 1)) % 3);
+        dibujarConfiguracion();
+        reproducirSonido(SONIDO_MENU_MOVER);
+      }
+      if (juegoActual == 0 && (toqueIzquierda || toqueDerecha)) {
+        modoSnake = (ModoSnake)(((int)modoSnake + (toqueIzquierda ? 2 : 1)) % 3);
+        dibujarConfiguracion();
+        reproducirSonido(SONIDO_MENU_MOVER);
+      }
+      if (controles.b.recienPresionado) cambiarEstado(ESTADO_MENU);
+      else if (controles.a.recienPresionado) cambiarEstado(ESTADO_CUENTA);
+      break;
+
+    case ESTADO_AYUDA:
+      if (controles.a.recienPresionado || controles.b.recienPresionado) cambiarEstado(ESTADO_MENU);
+      break;
+
+    case ESTADO_CUENTA: {
+      unsigned long tiempo = millis() - inicioTransicion;
+      if (controles.b.recienPresionado) { cambiarEstado(ESTADO_MENU); break; }
+      bool neutral = !controles.a.presionado && !controles.c.presionado &&
+                     !controles.arriba && !controles.abajo && !controles.izquierda && !controles.derecha;
+      // Comprobar ANTES de dibujar el aviso evita que aparezca durante un solo cuadro.
+      if (tiempo >= 3000 && neutral) { cambiarEstado(ESTADO_JUGANDO); break; }
+      // Tolerancia al soltar los controles: conserva el último número durante 250 ms.
+      if (tiempo >= 3000 && tiempo < 3250) break;
+      int cuadro = min(3, (int)(tiempo / 1000));
+      if (cuadro != cuadroTransicion) {
+        cuadroTransicion = cuadro;
+        rectanguloRelleno(23, 44, 114, 38, COLOR_FONDO_UI);
+        if (cuadro < 3) {
+          char texto[2] = { (char)('3' - cuadro), 0 };
+          escribirCentrado(55, texto, COLOR_AMARILLO, 2);
+          reproducirSonido(SONIDO_MENU_MOVER);
+        } else escribirCentrado(58, "SUELTA CONTROLES", COLOR_BLANCO, 1);
       }
       break;
+    }
 
     case ESTADO_JUGANDO:
       if (controles.c.recienPresionado) {
         reproducirSonido(SONIDO_PAUSA);
         cambiarEstado(ESTADO_PAUSA);
       }
-      // El juego avanza; si devuelve false, chocó: se oye el choque,
-      // se espera un instante (sin cortar el sonido) y va al game over
-      else if (!JUEGOS[juegoActual].actualizar(controles)) {
-        fijarMotor(0);
-        reproducirSonido(SONIDO_CHOQUE);
-        esperarConSonido(PAUSA_CHOQUE_MS);
-        cambiarEstado(ESTADO_FIN);
+      // El resultado distingue derrota y victoria; el choque es no bloqueante.
+      else {
+        ResultadoPartida resultado = JUEGOS[juegoActual].actualizar(controles);
+        if (resultado != PARTIDA_CONTINUA) {
+          victoria = resultado == PARTIDA_GANADA;
+          cambiarEstado(victoria ? ESTADO_FIN : ESTADO_CHOQUE);
+        }
       }
       break;
+
+    case ESTADO_CHOQUE: {
+      unsigned long tiempo = millis() - inicioTransicion;
+      int cuadro = tiempo / 100;
+      if (cuadro != cuadroTransicion) {
+        cuadroTransicion = cuadro;
+        rectanguloBorde(0, ALTO_MARCADOR, ANCHO_PANTALLA, ALTO_PANTALLA - ALTO_MARCADOR,
+                        cuadro % 2 ? COLOR_AMARILLO : COLOR_ROJO);
+      }
+      if (tiempo >= PAUSA_CHOQUE_MS) cambiarEstado(ESTADO_FIN);
+      break;
+    }
 
     case ESTADO_PAUSA:
       if (controles.c.recienPresionado) {
         reproducirSonido(SONIDO_PAUSA);
-        cambiarEstado(ESTADO_JUGANDO);
+        cambiarEstado(ESTADO_CUENTA);
       } else if (controles.b.recienPresionado) {
         cambiarEstado(ESTADO_MENU);
       }
       break;
 
     case ESTADO_FIN:
+      if(millis()-ultimaActividadFin>=INACTIVIDAD_FIN_MS) {
+        cambiarEstado(ESTADO_MENU);
+        break;
+      }
       if (toqueArriba || toqueAbajo) {
         opcionFin = 1 - opcionFin;
         dibujarOpcionesFin();
@@ -403,11 +583,13 @@ void actualizarJuego(const EstadoControles& controles) {
       }
       if (controles.a.recienPresionado) {
         reproducirSonido(SONIDO_MENU_ELEGIR);
-        cambiarEstado(opcionFin == 0 ? ESTADO_JUGANDO : ESTADO_MENU);
+        cambiarEstado(opcionFin == 0 ? ESTADO_CUENTA : ESTADO_MENU);
       }
       break;
   }
 
   arribaAnterior = controles.arriba;
   abajoAnterior  = controles.abajo;
+  izquierdaAnterior = controles.izquierda;
+  derechaAnterior = controles.derecha;
 }

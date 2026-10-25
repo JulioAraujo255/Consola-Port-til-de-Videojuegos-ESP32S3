@@ -63,6 +63,9 @@ const uint16_t COLOR_JUEGO_CARRERAS = 0xC8E3;  // Rojo
 // Inicia el bus SPI y la pantalla. Se llama una vez en setup().
 void iniciarPantalla();
 
+// Presenta únicamente el resultado final del cuadro pendiente.
+void presentarPantalla();
+
 // Pinta toda el área lógica de negro.
 void limpiarPantalla();
 
@@ -73,6 +76,11 @@ void rectanguloRelleno(int x, int y, int ancho, int alto, uint16_t color);
 void rectanguloBorde(int x, int y, int ancho, int alto, uint16_t color);
 void rectanguloRedondeado(int x, int y, int ancho, int alto, int radio,
                           uint16_t color, bool relleno);
+
+// Compone una imagen RGB565 en RAM, recortada al área lógica.
+// presentarPantalla() enviará el resultado final por bloques SPI.
+// El búfer es mutable por compatibilidad con Adafruit_SPITFT; no se altera.
+void dibujarImagenRGB565(int x, int y, int ancho, int alto, uint16_t* pixeles);
 
 // Texto (fuente estándar: cada letra mide 6 x 8 píxeles por tamaño)
 int  anchoTexto(const char* texto, uint8_t tamano);

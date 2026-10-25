@@ -39,9 +39,9 @@ struct EstadoControles {
 
   // Botones de acción
   EstadoBoton a;   // Jugar / confirmar
-  EstadoBoton b;   // Volver al inicio
-  EstadoBoton c;   // Pausa
-  EstadoBoton d;   // Reservado
+  EstadoBoton b;   // Volver / acción secundaria del juego
+  EstadoBoton c;   // Pausar / reanudar
+  EstadoBoton d;   // Silenciar / activar sonido
 };
 
 // ------------------------------------------------------------

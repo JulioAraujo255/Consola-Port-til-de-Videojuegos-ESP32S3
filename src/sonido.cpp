@@ -122,10 +122,25 @@ static const Paso EF_RECORD[] = {
   { FIN, 0, 0, 0 }
 };
 
+static const Paso EF_DISPARO[] = {
+  { TONO, 1500, 350, 80 }, { FIN, 0, 0, 0 }
+};
+static const Paso EF_POTENCIA[] = {
+  { TONO, 400, 800, 80 }, { TONO, 800, 1600, 100 }, { FIN, 0, 0, 0 }
+};
+static const Paso EF_PISAR[] = {
+  { TONO, 220, 100, 65 }, { FIN, 0, 0, 0 }
+};
+static const Paso EF_JEFE[] = {
+  { RUIDO, 80, 600, 180 }, { TONO, NOTA_C5, NOTA_C5, 90 },
+  { TONO, NOTA_E5, NOTA_E5, 90 }, { TONO, NOTA_C6, NOTA_C6, 250 }, { FIN, 0, 0, 0 }
+};
+
 // Tabla: efecto -> su lista de pasos (mismo orden que EfectoSonido)
 static const Paso* const EFECTOS[] = {
   EF_INICIO, EF_MENU_MOVER, EF_MENU_ELEGIR, EF_PAUSA, EF_COMER,
-  EF_SALTO, EF_CARRIL, EF_NIVEL, EF_CHOQUE, EF_GAME_OVER, EF_RECORD
+  EF_SALTO, EF_CARRIL, EF_NIVEL, EF_CHOQUE, EF_GAME_OVER, EF_RECORD,
+  EF_DISPARO, EF_POTENCIA, EF_PISAR, EF_JEFE
 };
 
 // ------------------------------------------------------------
@@ -293,3 +308,5 @@ void alternarSilencio() {
     reproducirSonido(SONIDO_MENU_ELEGIR);   // Aviso de que volvió el sonido
   }
 }
+
+bool sonidoHabilitado() { return sonidoActivo; }

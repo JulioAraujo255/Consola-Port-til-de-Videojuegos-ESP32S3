@@ -33,7 +33,11 @@ enum EfectoSonido {
   SONIDO_NIVEL,         // Sube el nivel o la velocidad
   SONIDO_CHOQUE,        // Choque (ruido + barrido hacia abajo)
   SONIDO_GAME_OVER,     // Melodía triste
-  SONIDO_RECORD         // Fanfarria de récord nuevo
+  SONIDO_RECORD,        // Fanfarria de récord nuevo
+  SONIDO_DISPARO,       // Proyectil de Brasa
+  SONIDO_POTENCIA,      // Hongo o flor
+  SONIDO_PISAR,         // Enemigo o bloque
+  SONIDO_JEFE           // Jefe derrotado
 };
 
 // ------------------------------------------------------------
@@ -56,5 +60,6 @@ void esperarConSonido(unsigned long milisegundos);
 
 // Activa o silencia todo el sonido (botón D).
 void alternarSilencio();
+bool sonidoHabilitado();
 
 #endif  // SONIDO_H

@@ -18,6 +18,7 @@
 #define SNAKE_H
 
 #include "controles.h"
+#include "partida.h"
 
 // Reinicia la partida y dibuja el tablero completo.
 // La consola la llama al elegir SNAKE en el menú o al reintentar.
@@ -25,8 +26,8 @@ void comenzarSnake();
 
 // Avanza el juego según el tiempo y los controles.
 // Se llama en cada vuelta de loop() mientras se juega.
-// Devuelve false cuando la víbora choca (fin de la partida).
-bool actualizarSnake(const EstadoControles& controles);
+// Devuelve el resultado: continúa, pierde al chocar o gana al llenar el tablero.
+ResultadoPartida actualizarSnake(const EstadoControles& controles);
 
 // Vuelve a dibujar la partida tal como estaba.
 // La consola la llama al salir de la pausa.

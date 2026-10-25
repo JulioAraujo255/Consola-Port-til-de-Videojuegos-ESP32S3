@@ -2,7 +2,7 @@
  * ============================================================
  *  MINI CONSOLA DE VIDEOJUEGOS - ESP32-S3
  *  Archivo: main.cpp
- *  Descripción: programa principal del juego Snake.
+ *  Descripción: programa principal de la mini consola.
  *
  *  Organización del código por módulos:
  *  - pines.h          -> asignación de pines
@@ -25,11 +25,12 @@
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("=== MINI CONSOLA ESP32-S3 - SNAKE ===");
+  Serial.println("=== MINI CONSOLA ESP32-S3 - RETRO GAMES ===");
 
   iniciarPantalla();    // 1. Pantalla
   iniciarControles();   // 2. Joystick y botones
   iniciarJuego();       // 3. Juego (muestra la pantalla de inicio)
+  presentarPantalla();
 }
 
 // ------------------------------------------------------------
@@ -39,6 +40,7 @@ void loop() {
   // Se leen los controles y el juego decide qué hacer con ellos
   EstadoControles controles = leerControles();
   actualizarJuego(controles);
+  presentarPantalla();
 
   delay(5);  // Pequeña pausa entre lecturas
 }

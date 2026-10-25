@@ -23,6 +23,7 @@
 #include "dino.h"
 #include "pantalla.h"
 #include "sonido.h"
+#include "interfaz.h"
 #include <math.h>
 
 // ------------------------------------------------------------
@@ -48,7 +49,7 @@ const uint16_t COLOR_AVE_CUERPO   = 0x9286;
 const uint16_t COLOR_AVE_PICO     = 0xFDA0;  // Naranja
 
 // Escenario
-const int ALTO_BARRA = 11;   // Barra de puntos (filas 0 a 10); el cielo empieza abajo
+const int ALTO_BARRA = ALTO_MARCADOR;
 const int Y_SUELO    = 104;  // Línea del suelo (las patas se apoyan aquí)
 
 // Todos los sprites se dibujan al doble de tamaño
@@ -75,8 +76,8 @@ const int PUNTOS_PARA_AVES  = 100;   // Desde aquí pueden aparecer aves
 const int PROBABILIDAD_AVE  = 35;    // % de que el obstáculo sea un ave
 
 // Física del salto (en píxeles por cuadro, a la velocidad inicial)
-const float IMPULSO_SALTO  = 4.8;   // Velocidad hacia arriba al saltar
-const float GRAVEDAD       = 0.35;  // Cuánto frena la subida en cada cuadro
+const float IMPULSO_SALTO  = 4.8f;   // Velocidad hacia arriba al saltar
+const float GRAVEDAD       = 0.35f;  // Cuánto frena la subida en cada cuadro
 const float GRAVEDAD_EXTRA = 3.0;   // Multiplicador si se mantiene abajo en el aire
 
 // Tiempo y velocidad.
@@ -149,6 +150,11 @@ static const char* const PIEDRA[ALTO_PIEDRA] = {
   "RRRRRRRRRR",
 };
 
+static const char* const ROCA_ALTA[7] = {
+  "....RR....", "...RRRR...", "..RRRRRR..", ".RRRrRRRR.",
+  "RRRRRRRRR.", "RRRRRRrRRR", "RRRRRRRRRR"
+};
+
 // Ave (mira a la izquierda): alas arriba y alas extendidas
 static const char* const AVE_ALAS_ARRIBA[ALTO_AVE] = {
   "W.......W",
@@ -168,7 +174,9 @@ static const char* const AVE_ALAS_EXTENDIDAS[ALTO_AVE] = {
 // ------------------------------------------------------------
 enum TipoObstaculo {
   OBSTACULO_PIEDRA,
-  OBSTACULO_AVE
+  OBSTACULO_AVE,
+  OBSTACULO_ROCA_ALTA,
+  OBSTACULO_AVE_ALTA
 };
 
 struct Obstaculo {
@@ -176,6 +184,7 @@ struct Obstaculo {
   TipoObstaculo tipo;
   int x;                // Posición actual (columna izquierda, en píxeles)
   int xDibujado;        // Dónde se dibujó por última vez
+  bool superado;
 };
 
 // ------------------------------------------------------------
@@ -183,7 +192,11 @@ struct Obstaculo {
 //  "static": privadas de este archivo.
 // ------------------------------------------------------------
 static int  puntuacion = 0;
-static int  record     = 0;          // Mejor puntuación de Dino Run en la sesión
+static int bonus = 0;
+static bool arribaAnterior = false;
+static unsigned long momentoSalto = 0;
+static int polvoRestante = 0;
+static bool nocheDibujada = false;
 static long distancia  = 0;          // Píxeles recorridos en la partida
 static int  velocidad  = VELOCIDAD_INICIAL;   // En décimas de píxel por cuadro
 static int  restoDecimas = 0;        // Décimas que sobraron del cuadro anterior
@@ -217,6 +230,11 @@ static uint8_t cimaCerroLejano[ANCHO_PANTALLA];
 static uint8_t cimaCerroCerca[ANCHO_PANTALLA];
 static bool cerrosCalculados = false;
 
+static bool esAve(const Obstaculo& o) {
+  return o.tipo == OBSTACULO_AVE || o.tipo == OBSTACULO_AVE_ALTA;
+}
+static bool esNoche() { return (distancia / 3600) % 2 == 1; }
+
 // ------------------------------------------------------------
 //  5. FONDO Y DIBUJO DE SPRITES
 // ------------------------------------------------------------
@@ -241,7 +259,7 @@ static uint16_t colorFondo(int x, int y) {
   if (y > Y_SUELO)             return COLOR_ARENA;
   if (y >= cimaCerroCerca[x])  return COLOR_CERRO_CERCA;
   if (y >= cimaCerroLejano[x]) return COLOR_CERRO_LEJANO;
-  return COLOR_CIELO;
+  return esNoche() ? COLOR_FONDO_UI : COLOR_CIELO;
 }
 
 // Vuelve a pintar el escenario en un rectángulo (sirve para
@@ -388,13 +406,13 @@ static void dibujarDino(bool forzar) {
 
 // Medidas en pantalla de cada tipo de obstáculo
 static int anchoObstaculo(const Obstaculo& o) {
-  return (o.tipo == OBSTACULO_PIEDRA ? ANCHO_PIEDRA : ANCHO_AVE) * ESCALA;
+  return (esAve(o) ? ANCHO_AVE : ANCHO_PIEDRA) * ESCALA;
 }
 static int altoObstaculo(const Obstaculo& o) {
-  return (o.tipo == OBSTACULO_PIEDRA ? ALTO_PIEDRA : ALTO_AVE) * ESCALA;
+  return (esAve(o) ? ALTO_AVE : o.tipo == OBSTACULO_ROCA_ALTA ? 7 : ALTO_PIEDRA) * ESCALA;
 }
 static int yObstaculo(const Obstaculo& o) {
-  return (o.tipo == OBSTACULO_PIEDRA) ? Y_SUELO - ALTO_PIEDRA * ESCALA : Y_AVE;
+  return esAve(o) ? (o.tipo == OBSTACULO_AVE_ALTA ? 70 : Y_AVE) : Y_SUELO - altoObstaculo(o);
 }
 
 // Dibuja un obstáculo en su posición actual y borra la franja
@@ -409,8 +427,9 @@ static void dibujarObstaculo(Obstaculo& o) {
     borrarZona(o.x + ancho, y, o.xDibujado - o.x, alto);
   }
 
-  if (o.tipo == OBSTACULO_PIEDRA) {
-    dibujarFilas(o.x, y, PIEDRA, ALTO_PIEDRA, ANCHO_PIEDRA);
+  if (!esAve(o)) {
+    dibujarFilas(o.x, y, o.tipo == OBSTACULO_ROCA_ALTA ? ROCA_ALTA : PIEDRA,
+                  alto / ESCALA, ANCHO_PIEDRA);
   } else {
     // El ave aletea: cambia de dibujo cada 8 cuadros
     bool alasArriba = ((distancia / 24) % 2) == 0;
@@ -426,32 +445,34 @@ static void dibujarObstaculo(Obstaculo& o) {
 
 // --- Barra superior: puntos y récord ---
 static void dibujarMarcador() {
-  char texto[16];
-
-  snprintf(texto, sizeof(texto), "PUNTOS:%05d", puntuacion);
-  escribirTextoConFondo(2, 2, texto, COLOR_BLANCO, COLOR_BARRA, 1);
-
-  snprintf(texto, sizeof(texto), "REC:%05d", record);
-  int x = ANCHO_PANTALLA - 2 - anchoTexto(texto, 1);
-  escribirTextoConFondo(x, 2, texto, COLOR_AMARILLO, COLOR_BARRA, 1);
+  char izquierda[32],derecha[24];
+  rectanguloRelleno(0,0,ANCHO_PANTALLA,ALTO_BARRA,COLOR_BARRA);
+  snprintf(izquierda,sizeof(izquierda),"Puntaje:%d",puntuacion);
+  filaMarcador(2,izquierda);
+  snprintf(izquierda,sizeof(izquierda),"Record:%d",max(recordActual(),puntuacion));
+  int base=dificultadActual()==FACIL?25:dificultadActual()==DIFICIL?35:VELOCIDAD_INICIAL;
+  snprintf(derecha,sizeof(derecha),"Nivel:%d",1+(velocidad-base)/AUMENTO_VELOCIDAD);
+  filaMarcador(11,izquierda,derecha);
+  dibujarAltavoz();
 }
 
 // --- Cielo con sol y nubes, y los dos cerros ---
 static void dibujarCieloYCerros() {
-  rectanguloRelleno(0, ALTO_BARRA, ANCHO_PANTALLA, Y_SUELO - ALTO_BARRA, COLOR_CIELO);
+  rectanguloRelleno(0, ALTO_BARRA, ANCHO_PANTALLA, Y_SUELO - ALTO_BARRA,
+                    esNoche() ? COLOR_FONDO_UI : COLOR_CIELO);
 
   // Sol: círculo de radio 4
   for (int dy = -4; dy <= 4; dy++) {
     for (int dx = -4; dx <= 4; dx++) {
-      if (dx * dx + dy * dy <= 17) dibujarPixel(134 + dx, 22 + dy, COLOR_SOL);
+      if (dx * dx + dy * dy <= 17) dibujarPixel(134 + dx, 27 + dy, esNoche() ? COLOR_BLANCO : COLOR_SOL);
     }
   }
 
   // Dos nubes (cada una son dos rectángulos)
-  rectanguloRelleno(20, 22, 18, 4, COLOR_NUBE);
-  rectanguloRelleno(24, 20, 9, 3, COLOR_NUBE);
-  rectanguloRelleno(78, 18, 18, 4, COLOR_NUBE);
-  rectanguloRelleno(82, 16, 9, 3, COLOR_NUBE);
+  rectanguloRelleno(20, 27, 18, 4, COLOR_NUBE);
+  rectanguloRelleno(24, 25, 9, 3, COLOR_NUBE);
+  rectanguloRelleno(78, 23, 18, 4, COLOR_NUBE);
+  rectanguloRelleno(82, 21, 9, 3, COLOR_NUBE);
 
   // Cerros: una columna por cada x, desde la cima hasta el suelo
   for (int x = 0; x < ANCHO_PANTALLA; x++) {
@@ -476,6 +497,7 @@ static void dibujarMarcasSuelo(int desplazamiento, bool borrar) {
 // --- Escenario completo (al empezar o al salir de la pausa) ---
 static void dibujarEscenario() {
   calcularCerros();
+  nocheDibujada = esNoche();
 
   rectanguloRelleno(0, 0, ANCHO_PANTALLA, ALTO_BARRA, COLOR_BARRA);
   dibujarMarcador();
@@ -515,7 +537,7 @@ static void moverDino(const EstadoControles& controles) {
   if (enElSuelo) {
     agachado = controles.abajo;
     // Saltar: con A (pedido guardado) o con el joystick hacia arriba
-    if (!agachado && (saltoPedido || controles.arriba)) {
+    if (!agachado && saltoPedido) {
       velocidadY = IMPULSO_SALTO * factor;
       reproducirSonido(SONIDO_SALTO);
     }
@@ -531,13 +553,16 @@ static void moverDino(const EstadoControles& controles) {
   if (altura > 0 || velocidadY > 0) {
     float gravedad = GRAVEDAD * factor * factor;
     if (controles.abajo) gravedad *= GRAVEDAD_EXTRA;
+    else if (!controles.a.presionado && !controles.arriba && altura >= 20) gravedad *= 1.5f;
     altura += velocidadY;
     velocidadY -= gravedad;
     if (altura <= 0) {   // Tocó el suelo
       altura = 0;
       velocidadY = 0;
+      polvoRestante = 5;
     }
   }
+  if (polvoRestante > 0) polvoRestante--;
 
   // Animación de las patas (solo se ve en el suelo)
   contadorCuadros++;
@@ -558,9 +583,13 @@ static void crearObstaculo() {
       bool puedeSerAve = (puntuacion >= PUNTOS_PARA_AVES);
       obstaculos[i].tipo = (puedeSerAve && random(100) < PROBABILIDAD_AVE)
                            ? OBSTACULO_AVE : OBSTACULO_PIEDRA;
+      if (esAve(obstaculos[i]) && random(100) < 35) obstaculos[i].tipo = OBSTACULO_AVE_ALTA;
+      else if (!esAve(obstaculos[i]) && puntuacion >= 150 && random(100) < 35)
+        obstaculos[i].tipo = OBSTACULO_ROCA_ALTA;
       obstaculos[i].x = ANCHO_PANTALLA;
       obstaculos[i].xDibujado = ANCHO_PANTALLA;
       obstaculos[i].activo = true;
+      obstaculos[i].superado = false;
       return;
     }
   }
@@ -573,7 +602,10 @@ static void moverObstaculos(int paso) {
     Obstaculo& o = obstaculos[i];
     if (!o.activo) continue;
     o.x -= paso;
-    dibujarObstaculo(o);
+    if (!o.superado && o.x + anchoObstaculo(o) <= X_DINO + 4) {
+      o.superado = true;
+      bonus += 5;
+    }
     if (o.x + anchoObstaculo(o) <= 0) {
       o.activo = false;   // Salió por la izquierda
     }
@@ -583,7 +615,9 @@ static void moverObstaculos(int paso) {
   if (distanciaDesdeUltimo >= separacionSiguiente) {
     crearObstaculo();
     distanciaDesdeUltimo = 0;
-    separacionSiguiente = random(SEPARACION_MINIMA, SEPARACION_MAXIMA + 1);
+    // Al menos 130 px: permite terminar un salto completo antes del siguiente.
+    int minimo = dificultadActual() == FACIL ? 170 : dificultadActual() == DIFICIL ? SEPARACION_MINIMA : 150;
+    separacionSiguiente = random(minimo, SEPARACION_MAXIMA + 1);
   }
 }
 
@@ -617,18 +651,6 @@ static bool hayChoque() {
   return false;
 }
 
-// ¿Algún obstáculo está pasando por la zona del triceratops?
-// (en ese caso hay que redibujarlo para que no quede tapado)
-static bool obstaculoCercaDelDino() {
-  for (int i = 0; i < MAX_OBSTACULOS; i++) {
-    const Obstaculo& o = obstaculos[i];
-    if (o.activo && o.x < X_DINO + ANCHO_DINO * ESCALA && o.x + anchoObstaculo(o) > X_DINO) {
-      return true;
-    }
-  }
-  return false;
-}
-
 // ------------------------------------------------------------
 //  11. AVANCE DEL JUEGO
 // ------------------------------------------------------------
@@ -641,21 +663,19 @@ static void avanzarEscenario() {
   int paso = restoDecimas / 10;
   restoDecimas %= 10;
 
-  dibujarMarcasSuelo(desplazamientoSuelo, true);              // Borrar marcas viejas
   desplazamientoSuelo = (desplazamientoSuelo + paso) % (11 * 23);
-  dibujarMarcasSuelo(desplazamientoSuelo, false);             // Dibujar las nuevas
 
   moverObstaculos(paso);
 
   // Puntos por distancia
   distancia += paso;
-  int nuevosPuntos = distancia / PIXELES_POR_PUNTO;
+  int nuevosPuntos = distancia / PIXELES_POR_PUNTO + bonus;
   if (nuevosPuntos != puntuacion) {
     puntuacion = nuevosPuntos;
-    dibujarMarcador();
 
     // Cada 100 puntos, más velocidad (hasta el máximo)
-    int nuevaVelocidad = VELOCIDAD_INICIAL + (puntuacion / PUNTOS_POR_AUMENTO) * AUMENTO_VELOCIDAD;
+    int base = dificultadActual() == FACIL ? 25 : dificultadActual() == DIFICIL ? 35 : VELOCIDAD_INICIAL;
+    int nuevaVelocidad = base + (distancia / PIXELES_POR_PUNTO / PUNTOS_POR_AUMENTO) * AUMENTO_VELOCIDAD;
     nuevaVelocidad = min(nuevaVelocidad, VELOCIDAD_MAXIMA);
     if (nuevaVelocidad != velocidad) {
       velocidad = nuevaVelocidad;
@@ -669,7 +689,10 @@ static void avanzarEscenario() {
 static void reiniciarPartida() {
   puntuacion = 0;
   distancia  = 0;
-  velocidad  = VELOCIDAD_INICIAL;
+  velocidad = dificultadActual() == FACIL ? 25 : dificultadActual() == DIFICIL ? 35 : VELOCIDAD_INICIAL;
+  bonus = 0;
+  arribaAnterior = false;
+  polvoRestante = 0;
   restoDecimas = 0;
   altura     = 0;
   velocidadY = 0;
@@ -696,40 +719,65 @@ void comenzarDino() {
   ultimoCuadro = millis();
 }
 
-bool actualizarDino(const EstadoControles& controles) {
+ResultadoPartida actualizarDino(const EstadoControles& controles) {
   // loop() llama a esta función cada ~5 ms, pero el juego avanza
   // cada 25 ms. "recienPresionado" dura una sola llamada, así que
   // se guarda el pedido de salto para no perderlo.
-  if (controles.a.recienPresionado) {
+  if ((controles.a.recienPresionado || (controles.arriba && !arribaAnterior)) && altura <= 0) {
     saltoPedido = true;
+    momentoSalto = millis();
   }
+  arribaAnterior = controles.arriba;
+  if (saltoPedido && millis() - momentoSalto > 120) saltoPedido = false;
 
-  if (millis() - ultimoCuadro < INTERVALO_CUADRO_MS) {
-    return true;   // Todavía no toca el siguiente cuadro
+  unsigned int pasos = pasosPendientes(millis(), ultimoCuadro, INTERVALO_CUADRO_MS);
+  if (!pasos) return PARTIDA_CONTINUA;
+  Obstaculo anteriores[MAX_OBSTACULOS];
+  memcpy(anteriores, obstaculos, sizeof(anteriores));
+  int sueloAnterior = desplazamientoSuelo;
+  int puntosAnteriores = puntuacion;
+  ResultadoPartida resultado = PARTIDA_CONTINUA;
+  for (unsigned int i = 0; i < pasos; i++) {
+    moverDino(controles);
+    avanzarEscenario();
+    if (hayChoque()) { resultado = PARTIDA_PERDIDA; break; }
   }
-  ultimoCuadro = millis();
-
-  moverDino(controles);
-  avanzarEscenario();
-  dibujarDino(obstaculoCercaDelDino());
-
-  if (hayChoque()) {
-    // Redibujar los obstáculos encima del triceratops, para que
-    // se vea contra qué chocó (si no, su fondo los tapa)
+  if (esNoche() != nocheDibujada) dibujarEscenario();
+  else {
+    for (const Obstaculo& o : anteriores) {
+      if (o.activo) borrarZona(o.xDibujado, yObstaculo(o), anchoObstaculo(o), altoObstaculo(o));
+    }
+    borrarZona(3, Y_SUELO - 2, 11, 11);
+    dibujarMarcasSuelo(sueloAnterior, true);
+    dibujarMarcasSuelo(desplazamientoSuelo, false);
+    for (Obstaculo& o : obstaculos) if (o.activo) {
+      o.xDibujado = o.x;
+      dibujarObstaculo(o);
+    }
+    bool forzarDino = false;
     for (int i = 0; i < MAX_OBSTACULOS; i++) {
-      if (obstaculos[i].activo) dibujarObstaculo(obstaculos[i]);
+      const Obstaculo& viejo = anteriores[i];
+      const Obstaculo& nuevo = obstaculos[i];
+      if ((viejo.activo && viejo.x < X_DINO + ANCHO_DINO * ESCALA &&
+           viejo.x + anchoObstaculo(viejo) > X_DINO) ||
+          (nuevo.activo && nuevo.x < X_DINO + ANCHO_DINO * ESCALA &&
+           nuevo.x + anchoObstaculo(nuevo) > X_DINO)) forzarDino = true;
     }
-    if (puntuacion > record) {
-      record = puntuacion;
-    }
-    Serial.printf("Dino: choque! Puntuacion: %d\r\n", puntuacion);
-    return false;   // La consola hace sonar el choque y espera un instante
+    dibujarDino(forzarDino);
   }
-
-  return true;
+  if (polvoRestante > 0) {
+    dibujarPixel(5 + polvoRestante, Y_SUELO + 1, COLOR_ARENA_OSC);
+    dibujarPixel(10 - polvoRestante, Y_SUELO - 1, COLOR_ARENA_OSC);
+  }
+  if (puntosAnteriores != puntuacion) dibujarMarcador();
+  if (resultado == PARTIDA_PERDIDA)
+    for (Obstaculo& o : obstaculos) if (o.activo) dibujarObstaculo(o);
+  return resultado;
 }
 
 void redibujarDino() {
+  saltoPedido = false;
+  arribaAnterior = false;
   dibujarEscenario();
   ultimoCuadro = millis();
 }

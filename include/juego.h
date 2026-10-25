@@ -5,7 +5,7 @@
  *  Descripción: "especificación" de la consola (interfaz v3).
  *
  *  La consola funciona como una MÁQUINA DE ESTADOS: en cada
- *  momento está en uno solo de los cuatro estados, y los
+ *  momento está en uno solo de sus estados, y los
  *  controles provocan el paso de un estado a otro
  *  (ver el diagrama de navegación de la interfaz v3).
  *
@@ -26,8 +26,12 @@
 // ------------------------------------------------------------
 enum EstadoJuego {
   ESTADO_MENU,      // Menú "RETRO GAMES" (elegir juego con joystick + A)
+  ESTADO_CONFIGURACION,
+  ESTADO_AYUDA,
+  ESTADO_CUENTA,
   ESTADO_JUGANDO,   // Partida en curso del juego elegido
   ESTADO_PAUSA,     // Partida detenida (botón C)
+  ESTADO_CHOQUE,
   ESTADO_FIN        // Game over (Reintentar / Menu)
 };
 

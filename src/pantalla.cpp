@@ -15,6 +15,16 @@
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include "pines.h"
+#include "cuadro.h"
+
+static CuadroRGB565<ANCHO_PANTALLA,ALTO_PANTALLA> cuadro;
+class LienzoEstatico : public GFXcanvas16 {
+ public:
+  LienzoEstatico() : GFXcanvas16(ANCHO_PANTALLA,ALTO_PANTALLA,false) {
+    buffer=&cuadro.pixeles[0][0];
+  }
+};
+static LienzoEstatico lienzo;
 
 // ------------------------------------------------------------
 //  1. OBJETO DE PANTALLA (según el entorno)
@@ -42,7 +52,7 @@
 // Devuelve el color listo para enviar a la pantalla.
 // RGB565: 5 bits de rojo | 6 de verde | 5 de azul.
 // Si hace falta, intercambia los 5 bits del rojo con los del azul.
-static uint16_t ajustarColor(uint16_t color) {
+static inline uint16_t ajustarColor(uint16_t color) {
 #if !defined(MODO_SIMULACION) && INTERCAMBIAR_ROJO_AZUL
   uint16_t rojo  = (color >> 11) & 0x1F;
   uint16_t verde = (color >> 5)  & 0x3F;
@@ -74,6 +84,7 @@ void iniciarPantalla() {
 
   tft.setRotation(1);       // Horizontal
   tft.setTextWrap(false);   // El texto no salta de línea solo
+  lienzo.setTextWrap(false);
   tft.fillScreen(COLOR_NEGRO);
 
   // Se centra el área de 160 x 128 en la pantalla física
@@ -88,44 +99,77 @@ void iniciarPantalla() {
 }
 
 void limpiarPantalla() {
-  tft.fillRect(desplazamientoX, desplazamientoY,
-               ANCHO_PANTALLA, ALTO_PANTALLA, COLOR_NEGRO);
+  rectanguloRelleno(0,0,ANCHO_PANTALLA,ALTO_PANTALLA,COLOR_NEGRO);
+}
+
+void presentarPantalla() {
+  if(!cuadro.pendiente()) return;
+  bool escribiendo=false;
+  cuadro.presentar([&](int x,int y,int ancho,int alto,uint16_t* datos,int salto) {
+    if(!escribiendo) { tft.startWrite(); escribiendo=true; }
+    tft.setAddrWindow(x+desplazamientoX,y+desplazamientoY,ancho,alto);
+#if !defined(MODO_SIMULACION) && INTERCAMBIAR_ROJO_AZUL
+    uint16_t fila[ANCHO_PANTALLA];
+    for(int f=0;f<alto;f++) {
+      for(int c=0;c<ancho;c++) fila[c]=ajustarColor(datos[f*salto+c]);
+      tft.writePixels(fila,ancho);
+    }
+#else
+    if(ancho==salto) tft.writePixels(datos,ancho*alto);
+    else for(int f=0;f<alto;f++) tft.writePixels(datos+f*salto,ancho);
+#endif
+  });
+  if(escribiendo) tft.endWrite();
 }
 
 // ------------------------------------------------------------
 //  4. FIGURAS BÁSICAS
 // ------------------------------------------------------------
 void dibujarPixel(int x, int y, uint16_t color) {
-  tft.drawPixel(x + desplazamientoX, y + desplazamientoY, ajustarColor(color));
+  lienzo.drawPixel(x,y,color);
+  cuadro.ensuciar(x,y,1,1);
 }
 
 void dibujarLinea(int x0, int y0, int x1, int y1, uint16_t color) {
-  tft.drawLine(x0 + desplazamientoX, y0 + desplazamientoY,
-               x1 + desplazamientoX, y1 + desplazamientoY, ajustarColor(color));
+  lienzo.drawLine(x0,y0,x1,y1,color);
+  cuadro.ensuciar(min(x0,x1),min(y0,y1),abs(x1-x0)+1,abs(y1-y0)+1);
 }
 
 void rectanguloRelleno(int x, int y, int ancho, int alto, uint16_t color) {
-  tft.fillRect(x + desplazamientoX, y + desplazamientoY, ancho, alto, ajustarColor(color));
+  lienzo.fillRect(x,y,ancho,alto,color);
+  cuadro.ensuciar(x,y,ancho,alto);
 }
 
 void rectanguloBorde(int x, int y, int ancho, int alto, uint16_t color) {
-  tft.drawRect(x + desplazamientoX, y + desplazamientoY, ancho, alto, ajustarColor(color));
+  lienzo.drawRect(x,y,ancho,alto,color);
+  cuadro.ensuciar(x,y,ancho,alto);
 }
 
 void rectanguloRedondeado(int x, int y, int ancho, int alto, int radio,
                           uint16_t color, bool relleno) {
   if (relleno) {
-    tft.fillRoundRect(x + desplazamientoX, y + desplazamientoY,
-                      ancho, alto, radio, ajustarColor(color));
+    lienzo.fillRoundRect(x,y,ancho,alto,radio,color);
   } else {
-    tft.drawRoundRect(x + desplazamientoX, y + desplazamientoY,
-                      ancho, alto, radio, ajustarColor(color));
+    lienzo.drawRoundRect(x,y,ancho,alto,radio,color);
   }
+  cuadro.ensuciar(x,y,ancho,alto);
 }
 
 // ------------------------------------------------------------
 //  5. TEXTO
 // ------------------------------------------------------------
+
+void dibujarImagenRGB565(int x, int y, int ancho, int alto, uint16_t* pixeles) {
+  if (!pixeles || ancho <= 0 || alto <= 0) return;
+  int x0 = max(x, 0), y0 = max(y, 0);
+  int x1 = min(x + ancho, ANCHO_PANTALLA), y1 = min(y + alto, ALTO_PANTALLA);
+  if (x1 <= x0 || y1 <= y0) return;
+  for (int fila = y0; fila < y1; fila++) {
+    uint16_t* origen = pixeles + (fila - y) * ancho + (x0 - x);
+    memcpy(&cuadro.pixeles[fila][x0],origen,(x1-x0)*sizeof(uint16_t));
+  }
+  cuadro.ensuciar(x0,y0,x1-x0,y1-y0);
+}
 
 // Ancho en píxeles de un texto. Cada letra ocupa 6 columnas
 // (5 de dibujo + 1 de espacio); se descuenta el espacio final.
@@ -137,20 +181,22 @@ int anchoTexto(const char* texto, uint8_t tamano) {
 
 // Texto con fondo transparente (solo se pintan las letras).
 void escribirTexto(int x, int y, const char* texto, uint16_t color, uint8_t tamano) {
-  tft.setTextSize(tamano);
-  tft.setTextColor(ajustarColor(color));
-  tft.setCursor(x + desplazamientoX, y + desplazamientoY);
-  tft.print(texto);
+  lienzo.setTextSize(tamano);
+  lienzo.setTextColor(color);
+  lienzo.setCursor(x,y);
+  lienzo.print(texto);
+  cuadro.ensuciar(x,y,(int)strlen(texto)*6*tamano,8*tamano);
 }
 
 // Texto con fondo: borra lo que había debajo de cada letra.
 // Útil para números que cambian (puntuación, nivel).
 void escribirTextoConFondo(int x, int y, const char* texto,
                            uint16_t color, uint16_t fondo, uint8_t tamano) {
-  tft.setTextSize(tamano);
-  tft.setTextColor(ajustarColor(color), ajustarColor(fondo));
-  tft.setCursor(x + desplazamientoX, y + desplazamientoY);
-  tft.print(texto);
+  lienzo.setTextSize(tamano);
+  lienzo.setTextColor(color,fondo);
+  lienzo.setCursor(x,y);
+  lienzo.print(texto);
+  cuadro.ensuciar(x,y,(int)strlen(texto)*6*tamano,8*tamano);
 }
 
 // Texto centrado horizontalmente en el área lógica.

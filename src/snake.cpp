@@ -5,7 +5,7 @@
  *  Descripción: "cuerpo" del juego Snake (interfaz final, a color).
  *
  *  REGLAS:
- *  - Área de juego: grilla de 26 x 19 celdas de 6 px.
+ *  - Área de juego: grilla de 26 x 17 celdas de 6 px.
  *  - Cada comida suma 1 punto y agrega un segmento.
  *  - Cada 5 puntos sube un nivel y la víbora se acelera.
  *  - Se pierde al chocar con el borde o con el propio cuerpo.
@@ -18,6 +18,7 @@
 #include "snake.h"
 #include "pantalla.h"
 #include "sonido.h"
+#include "interfaz.h"
 
 // ------------------------------------------------------------
 //  1. CONSTANTES DEL JUEGO
@@ -26,9 +27,9 @@
 // Grilla del área de juego
 const int TAMANO_CELDA = 6;    // Cada celda mide 6 x 6 píxeles
 const int COLUMNAS     = 26;   // 26 x 6 = 156 píxeles de ancho
-const int FILAS        = 19;   // 19 x 6 = 114 píxeles de alto
+const int FILAS        = 17;
 const int ORIGEN_X     = 2;    // Esquina superior izquierda de la grilla
-const int ORIGEN_Y     = 13;
+const int ORIGEN_Y     = ALTO_MARCADOR+1;
 const int LARGO_MAXIMO = COLUMNAS * FILAS;   // Toda la grilla ocupada
 
 // Reglas
@@ -82,7 +83,15 @@ static Celda serpiente[LARGO_MAXIMO];
 static int largo = LARGO_INICIAL;
 
 static Direccion direccionActual    = DIR_DERECHA;  // Hacia donde se mueve
-static Direccion direccionPendiente = DIR_DERECHA;  // La que pidió el jugador
+static Direccion giros[2];
+static int cantidadGiros = 0;
+static int ultimaEntrada = -1;
+static int comidas = 0;
+static int pasosSinComer = 1000;
+static int combo = 1;
+static bool comidaEspecial = false;
+static int vidaEspecial = 0; // En pasos de juego: la pausa no consume el plazo.
+static bool ocupadas[COLUMNAS][FILAS];
 
 static Celda comida;                 // Posición de la comida
 static unsigned long ultimoPaso = 0; // Momento del último movimiento
@@ -99,6 +108,14 @@ static int pixelY(const Celda& c) { return ORIGEN_Y + c.fila    * TAMANO_CELDA; 
 static uint16_t colorPasto(const Celda& c) {
   return ((c.columna + c.fila) % 2 == 0) ? COLOR_PASTO_1 : COLOR_PASTO_2;
 }
+
+static bool esObstaculo(const Celda& c) {
+  return modoSnakeActual() == SNAKE_LABERINTO &&
+         (c.columna == 6 || c.columna == 19) &&
+         c.fila >= 4 && c.fila <= 14 && (c.fila < 8 || c.fila > 10);
+}
+
+static int capacidadTablero() { return LARGO_MAXIMO - (modoSnakeActual() == SNAKE_LABERINTO ? 16 : 0); }
 
 // Dibuja un segmento de 6 x 6.
 // - Cuerpo: contorno oscuro, relleno azul y un puntito claro
@@ -117,7 +134,8 @@ static void dibujarSegmento(const Celda& c, bool esCabeza) {
     return;
   }
 
-  rectanguloRelleno(x, y, TAMANO_CELDA, TAMANO_CELDA, COLOR_VIBORA);
+  rectanguloRelleno(x, y, TAMANO_CELDA, TAMANO_CELDA,
+                    pasosSinComer == 0 ? COLOR_ADORNO : COLOR_VIBORA);
 
   // Ojos: blanco + pupila negra, según la dirección
   // (ojoX1, ojoY1) y (ojoX2, ojoY2) = blancos; (dx, dy) = hacia dónde mira la pupila
@@ -148,10 +166,12 @@ static void dibujarSerpienteCompleta() {
 
 // Dibuja la comida: una manzana roja con tallo, hoja y brillo
 static void dibujarComida() {
+  if (largo >= capacidadTablero()) return;
   int x = pixelX(comida);
   int y = pixelY(comida);
-  rectanguloRelleno(x + 1, y + 2, 4, 4, COLOR_MANZANA);
-  rectanguloRelleno(x, y + 3, 6, 2, COLOR_MANZANA);
+  uint16_t color = comidaEspecial ? COLOR_AMARILLO : COLOR_MANZANA;
+  rectanguloRelleno(x + 1, y + 2, 4, 4, color);
+  rectanguloRelleno(x, y + 3, 6, 2, color);
   dibujarPixel(x + 3, y + 1, COLOR_TALLO);
   dibujarPixel(x + 4, y,     COLOR_HOJA);
   dibujarPixel(x + 2, y + 3, COLOR_BRILLO);
@@ -163,29 +183,34 @@ static void dibujarComida() {
 
 // --- Barra superior: puntuación y nivel ---
 static void dibujarMarcador() {
-  char texto[24];
-
-  snprintf(texto, sizeof(texto), "PUNTUACION:%d", puntuacion);
-  escribirTextoConFondo(2, 2, texto, COLOR_BLANCO, COLOR_BARRA, 1);
-
-  snprintf(texto, sizeof(texto), "NIVEL:%d", nivel);
-  int x = ANCHO_PANTALLA - 2 - anchoTexto(texto, 1);
-  escribirTextoConFondo(x, 2, texto, COLOR_AMARILLO, COLOR_BARRA, 1);
+  char izquierda[32],derecha[24];
+  rectanguloRelleno(0,0,ANCHO_PANTALLA,ALTO_MARCADOR,COLOR_BARRA);
+  snprintf(izquierda,sizeof(izquierda),"Puntaje:%d",puntuacion);
+  snprintf(derecha,sizeof(derecha),"Nivel:%d",nivel);
+  filaMarcador(2,izquierda,derecha);
+  snprintf(izquierda,sizeof(izquierda),"Record:%d",max(recordActual(),puntuacion));
+  snprintf(derecha,sizeof(derecha),"Combo:x%d",combo);
+  filaMarcador(11,izquierda,derecha);
+  dibujarAltavoz();
 }
 
 // --- Tablero vacío: barra oscura arriba y pasto a cuadros ---
 static void dibujarPantallaJuego() {
-  rectanguloRelleno(0, 0, ANCHO_PANTALLA, 11, COLOR_BARRA);
+  rectanguloRelleno(0, 0, ANCHO_PANTALLA, ALTO_MARCADOR, COLOR_BARRA);
   dibujarMarcador();
 
   // Borde del tablero (lo que queda alrededor de la grilla)
-  rectanguloRelleno(0, 11, ANCHO_PANTALLA, ALTO_PANTALLA - 11, COLOR_BORDE_SNAKE);
+  rectanguloRelleno(0, ALTO_MARCADOR, ANCHO_PANTALLA, ALTO_PANTALLA - ALTO_MARCADOR, COLOR_BORDE_SNAKE);
 
   // Cuadros de pasto
   for (int columna = 0; columna < COLUMNAS; columna++) {
     for (int fila = 0; fila < FILAS; fila++) {
       Celda c = { (int8_t)columna, (int8_t)fila };
       borrarCelda(c);
+      if (esObstaculo(c)) {
+        rectanguloRelleno(pixelX(c), pixelY(c), TAMANO_CELDA, TAMANO_CELDA, COLOR_GRIS);
+        rectanguloBorde(pixelX(c), pixelY(c), TAMANO_CELDA, TAMANO_CELDA, COLOR_GRIS_CLARO);
+      }
     }
   }
 }
@@ -194,35 +219,37 @@ static void dibujarPantallaJuego() {
 //  6. LÓGICA DE LA VÍBORA
 // ------------------------------------------------------------
 
-// Devuelve true si la celda está ocupada por la víbora
-static bool celdaOcupada(const Celda& c) {
-  for (int i = 0; i < largo; i++) {
-    if (serpiente[i].columna == c.columna && serpiente[i].fila == c.fila) {
-      return true;
+// Selección uniforme entre las celdas libres, sin reintentos aleatorios.
+static void colocarComida() {
+  int libres = capacidadTablero() - largo;
+  if (libres <= 0) return;
+  memset(ocupadas, 0, sizeof(ocupadas));
+  for (int i = 0; i < largo; i++) ocupadas[serpiente[i].columna][serpiente[i].fila] = true;
+  int elegida = random(libres);
+  for (int c = 0; c < COLUMNAS; c++) {
+    for (int f = 0; f < FILAS; f++) {
+      Celda candidata = { (int8_t)c, (int8_t)f };
+      if (ocupadas[c][f] || esObstaculo(candidata)) continue;
+      if (elegida-- == 0) {
+        comida = candidata;
+        comidaEspecial = comidas > 0 && comidas % 5 == 0;
+        vidaEspecial = comidaEspecial ? 55 : 0;
+        dibujarComida();
+        return;
+      }
     }
   }
-  return false;
-}
-
-// Coloca la comida en una celda libre al azar.
-// En la ESP32, random() usa el generador de números
-// aleatorios por hardware del chip.
-static void colocarComida() {
-  if (largo >= LARGO_MAXIMO) return;   // Grilla llena: no hay lugar
-  do {
-    comida.columna = random(COLUMNAS);
-    comida.fila    = random(FILAS);
-  } while (celdaOcupada(comida));
-  dibujarComida();
 }
 
 // Tiempo entre pasos según el nivel (FO-08)
 static unsigned long intervaloActual() {
+  unsigned long inicial = dificultadActual() == FACIL ? 300 :
+                          dificultadActual() == DIFICIL ? 190 : INTERVALO_INICIAL_MS;
   unsigned long reduccion = (unsigned long)(nivel - 1) * REDUCCION_POR_NIVEL_MS;
-  if (reduccion >= INTERVALO_INICIAL_MS - INTERVALO_MINIMO_MS) {
+  if (reduccion >= inicial - INTERVALO_MINIMO_MS) {
     return INTERVALO_MINIMO_MS;
   }
-  return INTERVALO_INICIAL_MS - reduccion;
+  return inicial - reduccion;
 }
 
 // Deja todo listo para una partida nueva
@@ -237,23 +264,40 @@ static void reiniciarPartida() {
   serpiente[2] = {6, 9};   // Cola
 
   direccionActual    = DIR_DERECHA;
-  direccionPendiente = DIR_DERECHA;
+  cantidadGiros = 0;
+  ultimaEntrada = -1;
+  comidas = 0;
+  pasosSinComer = 1000;
+  combo = 1;
+  comidaEspecial = false;
+  vidaEspecial = 0;
 }
 
 // Guarda la dirección que pide el jugador.
 // No se permite girar 180 grados (la víbora chocaría consigo misma).
 static void leerDireccion(const EstadoControles& controles) {
-  if      (controles.arriba    && direccionActual != DIR_ABAJO)     direccionPendiente = DIR_ARRIBA;
-  else if (controles.abajo     && direccionActual != DIR_ARRIBA)    direccionPendiente = DIR_ABAJO;
-  else if (controles.izquierda && direccionActual != DIR_DERECHA)   direccionPendiente = DIR_IZQUIERDA;
-  else if (controles.derecha   && direccionActual != DIR_IZQUIERDA) direccionPendiente = DIR_DERECHA;
+  int entrada = -1;
+  if (controles.arriba) entrada = DIR_ARRIBA;
+  else if (controles.abajo) entrada = DIR_ABAJO;
+  else if (controles.izquierda) entrada = DIR_IZQUIERDA;
+  else if (controles.derecha) entrada = DIR_DERECHA;
+  if (entrada == ultimaEntrada) return;
+  ultimaEntrada = entrada;
+  if (entrada < 0 || cantidadGiros == 2) return;
+  Direccion anterior = cantidadGiros ? giros[cantidadGiros - 1] : direccionActual;
+  // Los pares opuestos son 0/1 y 2/3.
+  if (entrada != anterior && entrada != ((int)anterior ^ 1)) giros[cantidadGiros++] = (Direccion)entrada;
 }
 
 // Mueve la víbora un paso.
 // Devuelve false si chocó (fin de la partida).
 static bool avanzarSerpiente() {
   // 1. Calcular la nueva posición de la cabeza
-  direccionActual = direccionPendiente;
+  if (cantidadGiros > 0) {
+    direccionActual = giros[0];
+    giros[0] = giros[1];
+    cantidadGiros--;
+  }
   Celda nuevaCabeza = serpiente[0];
   switch (direccionActual) {
     case DIR_ARRIBA:    nuevaCabeza.fila--;    break;
@@ -262,11 +306,23 @@ static bool avanzarSerpiente() {
     case DIR_DERECHA:   nuevaCabeza.columna++; break;
   }
 
+  if (modoSnakeActual() == SNAKE_LIBRE) {
+    nuevaCabeza.columna = (nuevaCabeza.columna + COLUMNAS) % COLUMNAS;
+    nuevaCabeza.fila = (nuevaCabeza.fila + FILAS) % FILAS;
+  }
+
   // 2. Choque con el borde (FO-06)
   if (nuevaCabeza.columna < 0 || nuevaCabeza.columna >= COLUMNAS ||
       nuevaCabeza.fila    < 0 || nuevaCabeza.fila    >= FILAS) {
     Serial.println("Snake: choque con el borde");
     return false;
+  }
+  if (esObstaculo(nuevaCabeza)) return false;
+  pasosSinComer = min(pasosSinComer + 1, 1000);
+  if (comidaEspecial && --vidaEspecial <= 0) {
+    comidaEspecial = false;
+    borrarCelda(comida);
+    dibujarComida();
   }
 
   // 3. ¿Comió?
@@ -305,9 +361,13 @@ static bool avanzarSerpiente() {
 
   // 8. Si comió: sumar puntos, actualizar nivel y nueva comida
   if (comio) {
-    puntuacion++;                                    // FO-07
+    combo = pasosSinComer <= 18 ? min(combo + 1, 3) : 1;
+    puntuacion += (comidaEspecial ? 3 : 1) * combo;
+    pasosSinComer = 0;
+    comidas++;
+    dibujarSegmento(serpiente[0], true);
     int nivelAnterior = nivel;
-    nivel = 1 + puntuacion / PUNTOS_POR_NIVEL;       // FO-08
+    nivel = 1 + comidas / PUNTOS_POR_NIVEL;
     reproducirSonido(nivel > nivelAnterior ? SONIDO_NIVEL : SONIDO_COMER);
     dibujarMarcador();
     colocarComida();
@@ -329,19 +389,22 @@ void comenzarSnake() {
   ultimoPaso = millis();
 }
 
-bool actualizarSnake(const EstadoControles& controles) {
+ResultadoPartida actualizarSnake(const EstadoControles& controles) {
   // La dirección se lee siempre, para no perder ningún giro
   leerDireccion(controles);
 
   // La víbora avanza un paso cada cierto tiempo (según el nivel)
   if (millis() - ultimoPaso >= intervaloActual()) {
     ultimoPaso = millis();
-    return avanzarSerpiente();
+    if (!avanzarSerpiente()) return PARTIDA_PERDIDA;
+    if (largo >= capacidadTablero()) return PARTIDA_GANADA;
   }
-  return true;   // Todavía no tocaba moverse: sigue la partida
+  return PARTIDA_CONTINUA;
 }
 
 void redibujarSnake() {
+  cantidadGiros = 0;
+  ultimaEntrada = -1;
   dibujarPantallaJuego();
   dibujarSerpienteCompleta();
   dibujarComida();

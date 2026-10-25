@@ -53,7 +53,7 @@
   #define PIN_SIM_BTN_A    15   // Botón A: jugar / confirmar
   #define PIN_SIM_BTN_B    16   // Botón B: volver al inicio
   #define PIN_SIM_BTN_C    17   // Botón C: pausa
-  #define PIN_SIM_BTN_D    18   // Botón D: reservado
+  #define PIN_SIM_BTN_D    18   // Botón D: silenciar / activar sonido
 #endif
 
 #endif  // PINES_H

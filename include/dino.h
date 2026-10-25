@@ -17,14 +17,15 @@
 #define DINO_H
 
 #include "controles.h"
+#include "partida.h"
 
 // Reinicia la partida y dibuja el escenario completo.
 void comenzarDino();
 
 // Avanza el juego según el tiempo y los controles.
 // Se llama en cada vuelta de loop() mientras se juega.
-// Devuelve false cuando el triceratops choca (fin de la partida).
-bool actualizarDino(const EstadoControles& controles);
+// Devuelve PARTIDA_PERDIDA al chocar, o PARTIDA_CONTINUA.
+ResultadoPartida actualizarDino(const EstadoControles& controles);
 
 // Vuelve a dibujar la partida tal como estaba (al salir de la pausa).
 void redibujarDino();

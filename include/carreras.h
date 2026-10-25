@@ -18,14 +18,15 @@
 #define CARRERAS_H
 
 #include "controles.h"
+#include "partida.h"
 
 // Reinicia la partida y dibuja la ruta completa.
 void comenzarCarreras();
 
 // Avanza el juego según el tiempo y los controles.
 // Se llama en cada vuelta de loop() mientras se juega.
-// Devuelve false cuando el auto del jugador choca (fin de la partida).
-bool actualizarCarreras(const EstadoControles& controles);
+// Devuelve PARTIDA_PERDIDA al chocar, o PARTIDA_CONTINUA.
+ResultadoPartida actualizarCarreras(const EstadoControles& controles);
 
 // Vuelve a dibujar la partida tal como estaba (al salir de la pausa).
 void redibujarCarreras();

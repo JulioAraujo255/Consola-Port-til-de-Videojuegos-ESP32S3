@@ -21,6 +21,7 @@
 #include "carreras.h"
 #include "pantalla.h"
 #include "sonido.h"
+#include "interfaz.h"
 
 // ------------------------------------------------------------
 //  1. CONSTANTES DEL JUEGO
@@ -40,8 +41,8 @@ const uint16_t COLOR_TRONCO       = 0x6A23;
 const uint16_t COLORES_RIVALES[3] = { 0x2B7C, 0xFE45, 0xF79E };   // Azul, amarillo, blanco
 
 // Zona de juego (debajo de la barra de puntos)
-const int ALTO_BARRA = 11;   // Barra de puntos (filas 0 a 10)
-const int Y_AREA     = 11;   // Primera fila de la zona de juego
+const int ALTO_BARRA = ALTO_MARCADOR;
+const int Y_AREA     = ALTO_BARRA;
 
 // Ruta: cordones rojo y blanco de 2 píxeles y dos líneas de carril
 const int X_BORDE_IZQUIERDO = 34;
@@ -59,11 +60,11 @@ const int ANCHO_AUTO = 10;
 const int ALTO_AUTO  = 14;
 const int X_CARRIL[CANTIDAD_CARRILES] = { 45, 75, 105 };   // Columna izquierda del auto
 const int Y_JUGADOR  = 108;
-const int MAX_RIVALES = 4;
+const int MAX_RIVALES = 6;
 
-// Separación entre autos rivales (en píxeles recorridos)
-const int SEPARACION_MINIMA = 40;
-const int SEPARACION_MAXIMA = 80;
+// Límites de separación de las nuevas formaciones.
+const int SEPARACION_SEGURA = 68;
+const int SEPARACION_INICIAL = 110;
 
 // Árboles (dibujo de 7 x 9) a los costados de la ruta
 const int ALTO_ARBOL      = 9;
@@ -132,6 +133,8 @@ struct Rival {
   uint16_t color;   // Color de la carrocería
   int y;            // Fila superior actual
   int yDibujado;    // Dónde se dibujó por última vez
+  bool superado;
+  bool cercano;
 };
 
 struct Arbol {
@@ -151,10 +154,17 @@ static int  velocidad  = VELOCIDAD_INICIAL;   // En décimas de píxel por cuadr
 static int  restoDecimas = 0;                 // Décimas que sobraron del cuadro anterior
 
 static int carrilJugador = 1;          // Empieza en el carril del medio
+static int xJugador = 75;
+static int xDibujadoJugador = 75;
+static int carrilSeguroAnterior = 1;
+static int bonus = 0;
+static int turbo = 100;
+static bool turboActivo = false;
+static int cuadroMotor = 0;
 
 static Rival rivales[MAX_RIVALES];
 static int distanciaDesdeUltimo = 0;   // Píxeles desde el último rival creado
-static int separacionSiguiente  = SEPARACION_MAXIMA;
+static int separacionSiguiente = SEPARACION_INICIAL;
 
 // Árboles: posición inicial (x, y). Tres columnas a los costados.
 static Arbol arboles[CANTIDAD_ARBOLES];
@@ -220,31 +230,20 @@ static void borrarZona(int x, int y, int ancho, int alto, uint16_t colorFondo) {
   }
 }
 
-// Mueve un dibujo hacia abajo: dibuja en la posición nueva y
-// borra la franja de arriba que quedó libre
-static void moverSpriteHaciaAbajo(int x, int yViejo, int yNuevo,
-                                  const char* const filas[], int alto, int ancho,
-                                  uint16_t colorCarroceria, uint16_t colorFondo) {
-  if (yNuevo > yViejo) {
-    borrarZona(x, yViejo, ancho, min(yNuevo - yViejo, alto), colorFondo);
-  }
-  dibujarSprite(x, yNuevo, filas, alto, ancho, colorCarroceria, colorFondo);
-}
-
 // ------------------------------------------------------------
 //  6. DIBUJO DEL ESCENARIO
 // ------------------------------------------------------------
 
 // --- Barra superior: puntos y nivel ---
 static void dibujarMarcador() {
-  char texto[16];
-
-  snprintf(texto, sizeof(texto), "PUNTOS:%05d", puntuacion);
-  escribirTextoConFondo(2, 2, texto, COLOR_BLANCO, COLOR_BARRA, 1);
-
-  snprintf(texto, sizeof(texto), "NIVEL:%d", nivel);
-  int x = ANCHO_PANTALLA - 2 - anchoTexto(texto, 1);
-  escribirTextoConFondo(x, 2, texto, COLOR_AMARILLO, COLOR_BARRA, 1);
+  char izquierda[32],derecha[24];
+  rectanguloRelleno(0,0,ANCHO_PANTALLA,ALTO_BARRA,COLOR_BARRA);
+  snprintf(izquierda,sizeof(izquierda),"Puntaje:%d",puntuacion);
+  filaMarcador(2,izquierda);
+  snprintf(izquierda,sizeof(izquierda),"Record:%d",max(recordActual(),puntuacion));
+  snprintf(derecha,sizeof(derecha),"Nivel:%d",nivel);
+  filaMarcador(11,izquierda,derecha);
+  dibujarAltavoz();
 }
 
 // --- Columna a rayas que "avanza" hacia abajo ---
@@ -277,8 +276,16 @@ static void dibujarRayas() {
 
 // --- Auto del jugador ---
 static void dibujarJugador() {
-  dibujarSprite(X_CARRIL[carrilJugador], Y_JUGADOR, AUTO, ALTO_AUTO, ANCHO_AUTO,
+  dibujarSprite(xJugador, Y_JUGADOR, AUTO, ALTO_AUTO, ANCHO_AUTO,
                 COLOR_AUTO_JUGADOR, COLOR_ASFALTO);
+  xDibujadoJugador = xJugador;
+}
+
+static void dibujarTurbo() {
+  rectanguloRelleno(2, 112, 29, 13, COLOR_PASTO);
+  escribirTexto(2, 112, "TURBO", COLOR_BLANCO, 1);
+  rectanguloBorde(2, 122, 29, 3, COLOR_BLANCO);
+  rectanguloRelleno(3, 123, turbo * 27 / 100, 1, turboActivo ? COLOR_AMARILLO : COLOR_ADORNO);
 }
 
 // --- Ruta completa (al empezar o al salir de la pausa) ---
@@ -303,6 +310,7 @@ static void dibujarEscenario() {
     }
   }
   dibujarJugador();
+  dibujarTurbo();
 }
 
 // ------------------------------------------------------------
@@ -322,9 +330,7 @@ static void moverJugador(const EstadoControles& controles) {
 
   if (carrilNuevo != carrilJugador) {
     reproducirSonido(SONIDO_CARRIL);
-    borrarZona(X_CARRIL[carrilJugador], Y_JUGADOR, ANCHO_AUTO, ALTO_AUTO, COLOR_ASFALTO);
     carrilJugador = carrilNuevo;
-    dibujarJugador();
   }
 }
 
@@ -332,16 +338,30 @@ static void moverJugador(const EstadoControles& controles) {
 //  8. LÓGICA DE LOS RIVALES Y CHOQUES
 // ------------------------------------------------------------
 
-// Crea un rival nuevo arriba de la pantalla, en un carril al azar
+// Crea una formación de uno o dos rivales con una ruta libre.
 static void crearRival() {
+  int libres = 0;
+  for (const Rival& r : rivales) if (!r.activo) libres++;
+  if (libres == 0) return;
+  // Cada formación conserva un carril libre, como máximo a un carril
+  // del anterior. Todos los rivales comparten velocidad: no se cierran huecos.
+  int seguro = constrain(carrilSeguroAnterior + (int)random(-1, 2), 0, 2);
+  bool doble = nivel >= 3 && libres >= 2 && random(100) < min(65, 15 + nivel * 4);
+  int bloqueado = (seguro + 1 + random(2)) % CANTIDAD_CARRILES;
+  carrilSeguroAnterior = seguro;
   for (int i = 0; i < MAX_RIVALES; i++) {
-    if (!rivales[i].activo) {
-      rivales[i].carril    = random(CANTIDAD_CARRILES);
+    if (!rivales[i].activo && bloqueado >= 0) {
+      rivales[i].carril    = bloqueado;
       rivales[i].color     = COLORES_RIVALES[random(3)];
       rivales[i].y         = Y_AREA - ALTO_AUTO;   // Todavía no se ve
       rivales[i].yDibujado = rivales[i].y;
       rivales[i].activo    = true;
-      return;
+      rivales[i].superado = false;
+      rivales[i].cercano = false;
+      if (!doble) break;
+      // El segundo rival bloquea el otro carril, nunca el seguro.
+      bloqueado = 3 - seguro - bloqueado;
+      doble = false;
     }
   }
 }
@@ -353,9 +373,13 @@ static void moverRivales(int paso) {
     Rival& r = rivales[i];
     if (!r.activo) continue;
     r.y += paso;
-    moverSpriteHaciaAbajo(X_CARRIL[r.carril], r.yDibujado, r.y,
-                          AUTO, ALTO_AUTO, ANCHO_AUTO, r.color, COLOR_ASFALTO);
-    r.yDibujado = r.y;
+    int lateral = abs(X_CARRIL[r.carril] - xJugador);
+    if (r.y + ALTO_AUTO > Y_JUGADOR && r.y < Y_JUGADOR + ALTO_AUTO &&
+        lateral >= ANCHO_AUTO - 2 && lateral <= ANCHO_AUTO + 8) r.cercano = true;
+    if (!r.superado && r.y >= Y_JUGADOR + ALTO_AUTO) {
+      r.superado = true;
+      bonus += r.cercano ? 8 : 5;
+    }
     if (r.y >= ALTO_PANTALLA) {
       r.activo = false;   // Salió por abajo
     }
@@ -365,7 +389,10 @@ static void moverRivales(int paso) {
   if (distanciaDesdeUltimo >= separacionSiguiente) {
     crearRival();
     distanciaDesdeUltimo = 0;
-    separacionSiguiente = random(SEPARACION_MINIMA, SEPARACION_MAXIMA + 1);
+    // Incluso a 6 px/cuadro hay tiempo para un cambio animado de carril.
+    int minimo = dificultadActual() == FACIL ? 100 : dificultadActual() == NORMAL ? 88 : 76;
+    minimo = max(SEPARACION_SEGURA, minimo - min(12, max(0, nivel - 7) * 2));
+    separacionSiguiente = random(minimo, minimo + 35);
   }
 }
 
@@ -375,12 +402,8 @@ static void moverArboles(int paso) {
     Arbol& a = arboles[i];
     a.y += paso;
     if (a.y >= ALTO_PANTALLA) {
-      borrarZona(a.x, a.yDibujado, 7, ALTO_ARBOL, COLOR_PASTO);   // Borrar lo que quedaba abajo
       a.y -= CICLO_ARBOLES;                          // Vuelve a entrar por arriba
-      a.yDibujado = a.y;
     }
-    moverSpriteHaciaAbajo(a.x, a.yDibujado, a.y, ARBOL, ALTO_ARBOL, 7, 0, COLOR_PASTO);
-    a.yDibujado = a.y;
   }
 }
 
@@ -388,7 +411,8 @@ static void moverArboles(int paso) {
 static bool hayChoque() {
   for (int i = 0; i < MAX_RIVALES; i++) {
     const Rival& r = rivales[i];
-    if (r.activo && r.carril == carrilJugador &&
+    if (r.activo && xJugador + ANCHO_AUTO - 1 > X_CARRIL[r.carril] + 1 &&
+        xJugador + 1 < X_CARRIL[r.carril] + ANCHO_AUTO - 1 &&
         r.y + ALTO_AUTO > Y_JUGADOR + 1 && r.y < Y_JUGADOR + ALTO_AUTO - 1) {
       return true;
     }
@@ -398,45 +422,52 @@ static bool hayChoque() {
 
 // Ronroneo del motor según el nivel (más nivel = más agudo)
 static void encenderMotor() {
-  fijarMotor(MOTOR_BASE_HZ + (nivel - 1) * MOTOR_POR_NIVEL_HZ);
+  int nivelVelocidad = (velocidad - VELOCIDAD_INICIAL) / AUMENTO_VELOCIDAD;
+  fijarMotor(MOTOR_BASE_HZ + max(0, nivelVelocidad) * MOTOR_POR_NIVEL_HZ + (turboActivo ? 25 : 0));
 }
 
 // ------------------------------------------------------------
 //  9. AVANCE DEL JUEGO
 // ------------------------------------------------------------
 
-static void avanzarEscenario() {
+static void avanzarEscenario(const EstadoControles& controles) {
+  int objetivoX = X_CARRIL[carrilJugador];
+  xJugador += constrain(objetivoX - xJugador, -8, 8);
+  cuadroMotor++;
+  turboActivo = controles.a.presionado && turbo >= 2;
+  if (turboActivo) turbo -= 2;
+  else if (!controles.a.presionado && cuadroMotor % 2 == 0) turbo = min(100, turbo + 1);
+  int velocidadEfectiva = velocidad;
+  if (controles.abajo) velocidadEfectiva -= 10;
+  else if (controles.arriba) velocidadEfectiva += 5;
+  if (turboActivo) velocidadEfectiva += 10;
+  velocidadEfectiva = constrain(velocidadEfectiva, 15, 60);
+  encenderMotor();
   // Cuántos píxeles enteros se avanza en este cuadro
   // (las décimas que sobran se guardan para el siguiente)
-  restoDecimas += velocidad;
+  restoDecimas += velocidadEfectiva;
   int paso = restoDecimas / 10;
   restoDecimas %= 10;
   if (paso == 0) return;
 
   desplazamientoRayas = (desplazamientoRayas + paso) % CICLO_RAYAS;
-  dibujarRayas();
   moverArboles(paso);
   moverRivales(paso);
 
-  // Un rival en el mismo carril puede pisar una fila del jugador
-  // justo antes de que se detecte el choque: se redibuja siempre
-  // (es un solo auto, no cuesta casi nada)
-  dibujarJugador();
-
   // Puntos por distancia y nivel
   distancia += paso;
-  int nuevosPuntos = distancia / PIXELES_POR_PUNTO;
+  int nuevosPuntos = distancia / PIXELES_POR_PUNTO + bonus;
   if (nuevosPuntos != puntuacion) {
     puntuacion = nuevosPuntos;
-    int nuevoNivel = 1 + puntuacion / PUNTOS_POR_NIVEL;
+    int nuevoNivel = 1 + distancia / PIXELES_POR_PUNTO / PUNTOS_POR_NIVEL;
     if (nuevoNivel != nivel) {
       nivel = nuevoNivel;
-      velocidad = min(VELOCIDAD_INICIAL + (nivel - 1) * AUMENTO_VELOCIDAD, VELOCIDAD_MAXIMA);
+      int base = dificultadActual() == FACIL ? 15 : dificultadActual() == DIFICIL ? 25 : VELOCIDAD_INICIAL;
+      velocidad = min(base + (nivel - 1) * AUMENTO_VELOCIDAD, VELOCIDAD_MAXIMA);
       reproducirSonido(SONIDO_NIVEL);
       encenderMotor();
       Serial.printf("Carreras: nivel %d\r\n", nivel);
     }
-    dibujarMarcador();
   }
 }
 
@@ -445,7 +476,14 @@ static void reiniciarPartida() {
   puntuacion = 0;
   nivel      = 1;
   distancia  = 0;
-  velocidad  = VELOCIDAD_INICIAL;
+  velocidad = dificultadActual() == FACIL ? 15 : dificultadActual() == DIFICIL ? 25 : VELOCIDAD_INICIAL;
+  bonus = 0;
+  turbo = 100;
+  turboActivo = false;
+  cuadroMotor = 0;
+  carrilSeguroAnterior = 1;
+  xJugador = X_CARRIL[1];
+  xDibujadoJugador = xJugador;
   restoDecimas = 0;
   carrilJugador = 1;
   desplazamientoRayas = 0;
@@ -456,7 +494,7 @@ static void reiniciarPartida() {
     rivales[i].activo = false;
   }
   distanciaDesdeUltimo = 0;
-  separacionSiguiente  = SEPARACION_MAXIMA;   // Un respiro al empezar
+  separacionSiguiente = SEPARACION_INICIAL;
 
   for (int i = 0; i < CANTIDAD_ARBOLES; i++) {
     arboles[i].x = ARBOLES_INICIALES[i][0];
@@ -476,23 +514,44 @@ void comenzarCarreras() {
   ultimoCuadro = millis();
 }
 
-bool actualizarCarreras(const EstadoControles& controles) {
+ResultadoPartida actualizarCarreras(const EstadoControles& controles) {
   // El cambio de carril se lee en cada llamada, para no perder toques
   moverJugador(controles);
 
-  if (millis() - ultimoCuadro >= INTERVALO_CUADRO_MS) {
-    ultimoCuadro = millis();
-    avanzarEscenario();
+  if (hayChoque()) return PARTIDA_PERDIDA;
+  unsigned int pasos = pasosPendientes(millis(), ultimoCuadro, INTERVALO_CUADRO_MS);
+  if (!pasos) return PARTIDA_CONTINUA;
+  Rival anteriores[MAX_RIVALES];
+  memcpy(anteriores, rivales, sizeof(anteriores));
+  int puntosAnteriores = puntuacion;
+  ResultadoPartida resultado = PARTIDA_CONTINUA;
+  for (unsigned int i = 0; i < pasos; i++) {
+    avanzarEscenario(controles);
+    if (hayChoque()) { resultado = PARTIDA_PERDIDA; break; }
   }
-
-  if (hayChoque()) {
-    Serial.printf("Carreras: choque! Puntuacion: %d\r\n", puntuacion);
-    return false;   // La consola hace sonar el choque y espera un instante
+  // Restaurar primero todas las áreas viejas; luego componer cada sprite una vez.
+  for (const Rival& r : anteriores) if (r.activo)
+    borrarZona(X_CARRIL[r.carril], r.yDibujado, ANCHO_AUTO, ALTO_AUTO, COLOR_ASFALTO);
+  borrarZona(xDibujadoJugador, Y_JUGADOR, ANCHO_AUTO, ALTO_AUTO, COLOR_ASFALTO);
+  for (Arbol& a : arboles) borrarZona(a.x, a.yDibujado, 7, ALTO_ARBOL, COLOR_PASTO);
+  dibujarRayas();
+  for (Arbol& a : arboles) {
+    dibujarSprite(a.x, a.y, ARBOL, ALTO_ARBOL, 7, 0, COLOR_PASTO);
+    a.yDibujado = a.y;
   }
-  return true;
+  for (Rival& r : rivales) if (r.activo) {
+    dibujarSprite(X_CARRIL[r.carril], r.y, AUTO, ALTO_AUTO, ANCHO_AUTO, r.color, COLOR_ASFALTO);
+    r.yDibujado = r.y;
+  }
+  dibujarJugador();
+  dibujarTurbo();
+  if (puntosAnteriores != puntuacion) dibujarMarcador();
+  return resultado;
 }
 
 void redibujarCarreras() {
+  izquierdaAnterior = false;
+  derechaAnterior = false;
   dibujarEscenario();
   encenderMotor();
   ultimoCuadro = millis();

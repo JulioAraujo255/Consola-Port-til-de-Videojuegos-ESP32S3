@@ -120,10 +120,10 @@ EstadoControles leerControles() {
 const uint8_t REG_EJE_X   = 0x10;
 const uint8_t REG_EJE_Y   = 0x11;
 const uint8_t REG_BOTON_Z = 0x20;   // Presionar el joystick
-const uint8_t REG_BOTON_D = 0x21;   // "DOWN"  (botón de abajo)
+const uint8_t REG_BOTON_C = 0x21;   // "DOWN"  (C: botón de abajo)
 const uint8_t REG_BOTON_A = 0x22;   // "UP"    (botón de arriba)
 const uint8_t REG_BOTON_B = 0x23;   // "RIGHT" (botón derecho)
-const uint8_t REG_BOTON_C = 0x24;   // "LEFT"  (botón izquierdo)
+const uint8_t REG_BOTON_D = 0x24;   // "LEFT"  (D: botón izquierdo)
 
 // --- 4.3 Códigos de evento de los botones ------------------
 const uint8_t EVENTO_PRESIONADO       = 0;
