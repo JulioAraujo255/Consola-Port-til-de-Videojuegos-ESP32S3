@@ -1,3 +1,7 @@
+# Enlace a carpeta Drive
+https://drive.google.com/drive/folders/1OHWbFy116bttQ_slHxOO7f71tnZ7_Z9W
+
+
 # Mini consola ESP32-S3
 
 Cuatro juegos sobre una TFT ST7735 de 160 × 128, gamepad I2C y buzzer: Snake, Dino Run, Carreras y JUMP-MAN. El entorno `simulacion` usa una ILI9341 en Wokwi con el mismo tamaño lógico. La rama `mejoras/jugabilidad-consola` amplía el firmware base sin cambiar los pines.
