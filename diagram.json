@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-esp32-s3-devkitc-1",
+      "id": "esp1",
+      "top": 120,
+      "left": 10,
+      "attrs": { "flashSize": "8" }
+    },
+    {
+      "type": "wokwi-ili9341",
+      "id": "lcd1",
+      "top": 60,
+      "left": 270,
+      "rotate": 90,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-analog-joystick",
+      "id": "joy1",
+      "top": 140,
+      "left": -190,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btnA",
+      "top": 420,
+      "left": 260,
+      "attrs": { "color": "green", "label": "A", "key": "a" }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btnB",
+      "top": 420,
+      "left": 360,
+      "attrs": { "color": "red", "label": "B", "key": "b" }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btnC",
+      "top": 420,
+      "left": 460,
+      "attrs": { "color": "blue", "label": "C", "key": "c" }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btnD",
+      "top": 420,
+      "left": 560,
+      "attrs": { "color": "yellow", "label": "D", "key": "d" }
+    },
+    {
+      "type": "wokwi-buzzer",
+      "id": "bz1",
+      "top": 330,
+      "left": -150,
+      "attrs": { "volume": "0.4" }
+    }
+  ],
+  "connections": [
+    [ "esp1:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp1:RX", "$serialMonitor:TX", "", [] ],
+    [ "lcd1:VCC", "esp1:3V3.1", "red", [] ],
+    [ "lcd1:GND", "esp1:GND.1", "black", [] ],
+    [ "lcd1:SCK", "esp1:12", "orange", [] ],
+    [ "lcd1:MOSI", "esp1:11", "blue", [] ],
+    [ "lcd1:CS", "esp1:10", "green", [] ],
+    [ "lcd1:D/C", "esp1:6", "purple", [] ],
+    [ "lcd1:RST", "esp1:7", "brown", [] ],
+    [ "lcd1:LED", "esp1:3V3.2", "red", [] ],
+    [ "joy1:VCC", "esp1:3V3.1", "red", [] ],
+    [ "joy1:GND", "esp1:GND.2", "black", [] ],
+    [ "joy1:VERT", "esp1:1", "gold", [] ],
+    [ "joy1:HORZ", "esp1:2", "cyan", [] ],
+    [ "btnA:1.l", "esp1:15", "green", [] ],
+    [ "btnA:2.l", "esp1:GND.3", "black", [] ],
+    [ "btnB:1.l", "esp1:16", "green", [] ],
+    [ "btnB:2.l", "esp1:GND.3", "black", [] ],
+    [ "btnC:1.l", "esp1:17", "green", [] ],
+    [ "btnC:2.l", "esp1:GND.3", "black", [] ],
+    [ "btnD:1.l", "esp1:18", "green", [] ],
+    [ "btnD:2.l", "esp1:GND.3", "black", [] ],
+    [ "bz1:2", "esp1:4", "orange", [] ],
+    [ "bz1:1", "esp1:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}

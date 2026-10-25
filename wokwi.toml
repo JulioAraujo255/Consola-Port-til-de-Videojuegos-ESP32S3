@@ -1,0 +1,9 @@
+# ============================================================
+#  MINI CONSOLA - Configuración del simulador Wokwi
+#  Indica qué programa compilado debe ejecutar el simulador.
+#  Usa el resultado del entorno [env:simulacion].
+# ============================================================
+[wokwi]
+version = 1
+firmware = '.pio/build/simulacion/firmware.bin'
+elf = '.pio/build/simulacion/firmware.elf'
